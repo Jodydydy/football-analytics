@@ -29,6 +29,27 @@ and FairMOT, not an ad-hoc choice.
 
 ---
 
+## D1b. Not shipping the fine-tuned detector
+
+**Decided:** the pipeline runs on stock pretrained YOLO11l. The MOT17 fine-tune, despite
+scoring mAP@50 0.903 on MOT17-val, was measured on the downstream task and rejected.
+
+**The measurement:** line-crossing event F1 went from 0.825 to 0.839 on MOT17 (+1.4 pp)
+and from 0.900 to 0.646 on CAVIAR (−25.4 pp). Twelve epochs, fully unfrozen, seven
+sequences from one dataset — catastrophic forgetting.
+
+**Why this is the important entry in this file:** the detector metric said the fine-tune
+was a success. The product metric said it was a serious regression on any scene the
+model had not seen. Both were true; only one of them mattered.
+
+**What it changed in how everything else here is reported:** detector metrics and event
+metrics are kept separate throughout, and no detector number is presented as evidence
+that the system works. Optimising a proxy until it stops predicting the objective is a
+failure mode that does not announce itself — it looks like progress right up to
+deployment.
+
+---
+
 ## D2. Reporting mAP@50 rather than mAP@50-95
 
 **Decided:** headline metric is mAP@50; mAP@50-95 reported alongside.
@@ -109,24 +130,73 @@ runs fine and predicts differently.
 
 ---
 
-## D7. Dropping empty and unusable inputs at ingestion
+## D7. Line crossing for doors, zone dwell for counters
 
-TODO — перенести решения из счётчиков и препроцессинга.
+**Decided:** entrances are scored by a line crossing; pickup counters and tables by a
+polygon with a dwell timer.
+
+**Why they differ:** at a door the event *is* a transition — you are inside or outside,
+and the interesting moment is the instant between. At a counter there is no transition
+to detect; a customer and a passer-by occupy the same pixels, and the only thing that
+separates them is **how long** they stay. A line at the counter would count everyone
+walking past; a dwell zone at the door would miss anyone who walks through briskly.
+
+**What breaks:** the dwell threshold is a business decision disguised as a parameter.
+Too low and foot traffic cutting through the zone is counted as customers; too high and
+quick pickups are missed. It is calibrated per site, and re-calibrated if the furniture
+moves.
+
+**Two accumulated failure modes, both fixed by state rather than by tuning:**
+
+*Someone standing on the line.* Detector jitter moves the anchor point back and forth
+across the line, emitting dozens of events from one person. Fixed with per-track dedup
+in the counter (`SingleLineCounter.counted_in` / `counted_out`) and, in
+post-processing, by cancelling opposite-direction pairs that land within a short window.
+
+*Someone standing in the doorway.* A single line cannot distinguish a completed passage
+from a hesitation. `TripwireCounter` requires both of a pair of parallel lines to be
+crossed in the same direction within a frame budget. Cleaner, at the cost of missing
+passages that are too fast (both lines in one frame) or too slow (gap exceeded).
+
+**Direction** comes from the start→end orientation of the line, inherited from
+`sv.LineZone`. Redrawing the line to fix reversed polarity is error-prone, so
+`--invert-direction` exists to flip it at the log level instead.
 
 ---
 
-## D8. Line crossing vs zone dwell
+## D8. Ground truth annotated by hand, by one person
 
-TODO — почему для входа линия, а для выдачи и столов полигон с таймером; что
-происходит с человеком, постоявшим в дверях; как определяется направление in/out.
+**Decided:** all event-level ground truth was annotated manually with the project's own
+tool (`eval/gt_marker.py`), by a single annotator.
+
+**Rules applied:** a table counts as occupied when a person is physically seated or
+standing at it for at least 3–5 seconds; consecutive people with gaps under 5 seconds
+form one session; walking through the zone does not count.
+
+**What it costs, stated plainly:** there is **no inter-annotator agreement estimate**.
+On ambiguous events — a person loitering in the doorway, a group entering together,
+someone turning back at the threshold — the label is one person's judgement, and the
+F1 figures inherit that. The rules above were written down precisely because the
+ambiguity is real, but written rules are not the same as a measured agreement rate.
+
+**One documented exclusion:** in the table-occupancy clip, a third person seated at
+`big_center` was fully occluded by a display stand. They were excluded from ground truth
+rather than counted as a detector miss, on the grounds that the camera physically cannot
+see them. This is defensible, and it means the metric measures the pipeline rather than
+the installation — which is a different claim, and should be described as such.
 
 ---
 
-## D9. Ground truth annotation
+## D9. Reporting the weak results too
 
-TODO — как размечался эталон, кем, какие правила для неоднозначных событий
-(группа входит вместе, человек разворачивается на пороге), почему нет оценки
-межаннотаторного согласия и что это значит для доверия к F1.
+**Decided:** `docs/METRICS.md` includes pickup detection at F1 0.647 (n=12, ±15 pp) and
+labels the table-occupancy 0.990 as per-second agreement over three sessions rather than
+event-level accuracy.
+
+**Why:** a metrics table containing only the good numbers is not a metrics table. The
+0.990 in particular reads as a stronger result than it is, and someone who quotes it
+without the caveat will be unable to defend it the first time they are asked what the
+sample size was.
 
 ---
 

@@ -4,7 +4,9 @@
 from its original source. Most are research-only; see the licence column before using
 anything commercially.
 
-Download helper: `tools/download_datasets.py` (TODO).
+Each row links to the original source. There is no download helper — most of these
+require accepting terms or requesting access, so automating the fetch would be
+misleading.
 
 ---
 

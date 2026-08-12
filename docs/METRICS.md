@@ -39,28 +39,88 @@ gap is visible rather than hidden.
 
 **Annotation filter.** Only pedestrian class (`1`), `conf = 1`, visibility ≥ 0.1.
 
+### ⚠️ This model was measured, and then not shipped
+
+The fine-tune improves the detector metric and **degrades the product**. Measured on the
+downstream task — line-crossing event F1, which is what the system actually delivers:
+
+| | Baseline YOLO11l | Fine-tuned on MOT17 | Δ |
+|---|---|---|---|
+| MOT17 (in-domain) | 0.825 | 0.839 | **+1.4 pp** |
+| CAVIAR (out-of-domain) | 0.900 | 0.646 | **−25.4 pp** |
+
+Twelve epochs, fully unfrozen, on seven sequences from a single dataset. The result is
+textbook **catastrophic forgetting**: the model specialised to MOT17's camera angles and
+crowd densities and lost general person detection. mAP@50 = 0.903 on MOT17-val looked
+excellent and was measuring the wrong thing.
+
+**Decision: the fine-tuned weights were not used.** The pipeline runs on stock
+pretrained weights.
+
+This is the most useful negative result in the project, and the reason the detector
+metric and the event metric are reported separately everywhere in this document. A
+detector number is a proxy; the product metric is the one that decides. Anyone quoting
+mAP@50 0.903 as evidence the system works has the causality backwards.
+
 ---
 
 ## 2. Event scoring on real footage
 
-| Task | Metric | n | Source | Status |
+| Task | Metric | n | 95% CI (Wilson) | Source |
 |---|---|---|---|---|
-| Entry / exit counting | F1 **0.957** | **24 events** | 4h private CCTV, pickup point | ✅ |
-| Table occupancy | F1 **0.990** | TODO | Café DVR recording | ✅ |
-| Queue detection | F1 **0.875** | TODO | Café DVR recording | ✅ |
-| Pickup, phone-shown | recall 12/21 = 0.57 | 21 | 4h private CCTV | ✅ |
+| Door events, **all** | F1 **0.921** | 89 events | P [0.85, 0.96] · R [0.85, 0.96] | 4 h private CCTV |
+| Door events, customers only | F1 **0.957** | 24 events | [0.86, 0.99] | same footage |
+| Queue detection (≥2 people) | F1 **0.875** | — | — | Café DVR |
+| Table occupancy, per-second | F1 **0.990** | 3 sessions / ~9 min | — | Café DVR |
+| Pickup hand-off, event-level | F1 **0.647** | 12 events | ±15 pp | Café DVR |
+| Pickup, phone-shown | recall 12/21 = **0.57** | 21 | — | 4 h private CCTV |
 
-**Read the sample size first.** F1 0.957 is computed over 24 crossing events. One or two
-errors move it by several hundredths, and the confidence interval is wide. This is a
-sanity check that the pipeline survives real footage — not a production accuracy
-guarantee. A defensible estimate would need hours of footage with hundreds of events.
+### Which door number to quote
 
-**Ground truth** was annotated by hand, by one person, using the project's own labelling
-tools. Single-annotator ground truth has no inter-annotator agreement estimate; on
-ambiguous events (people loitering in the doorway, groups entering together) that is a
-real source of bias.
+**0.921 over 89 events is the honest headline.** 0.957 is the same run restricted to
+customer events only — a business-relevant subset, but a subset, and only 24 events
+wide. Quoting the higher number without saying it is a 24-event subset invites exactly
+one question, and there is no good answer to it.
 
-TODO — fill in `n` for table occupancy and queue detection from the run logs.
+At n=24 a single error moves F1 by several hundredths; the Wilson interval [0.86, 0.99]
+spans the difference between "excellent" and "mediocre". This is a sanity check that the
+pipeline survives real footage, not a production accuracy guarantee.
+
+### The table-occupancy 0.990 is not what it looks like
+
+It is **per-second occupancy agreement**, not event detection. The clip is 9:05 long
+with three tables, so roughly 1 600 per-second samples — but only **three occupancy
+sessions** in the ground truth, one of which covers the entire clip (`left_bar`,
+occupied 00:00–09:05).
+
+Per-second samples are massively autocorrelated: predicting one long session correctly
+produces hundreds of consecutive "correct" seconds. The effective sample size is closer
+to 3 than to 1 600, and the number should never be presented as event-level accuracy.
+
+The ground truth also documents an **architectural blind spot**: a third person seated
+at `big_center` was fully occluded by a display stand and therefore excluded from the
+ground truth rather than counted as a detector miss. That decision is defensible — the
+camera physically cannot see them — but it means the metric measures the pipeline, not
+the installation.
+
+### Pickup detection was reported honestly as weak
+
+F1 0.647 on 12 events with a ±15 pp confidence interval was recorded in the project
+notes as "слабый production claim" — a weak basis for a production claim. It is listed
+here for the same reason: a metrics table that only contains the good results is not a
+metrics table.
+
+Redefining the metric from raw per-second intervals to visit level moved F1 from 0.18
+to 1.0 on a 6-minute clip with a single visit. That is a genuine insight about metric
+design — and simultaneously a sample of one, which is why it is not in the headline
+table.
+
+### Ground truth provenance
+
+Annotated by hand, by one person, with the project's own tools (`eval/gt_marker.py`).
+Single-annotator ground truth has **no inter-annotator agreement estimate**. On ambiguous
+events — someone loitering in the doorway, a group entering together, a person turning
+back at the threshold — that is a real source of bias, and it is not quantified here.
 
 ---
 
@@ -127,8 +187,34 @@ strong on clean frontal faces, the custom model wins on varied and imperfect one
 **n = 28.** One misclassification is 3.6%. Treat this as directional evidence, not a
 measurement.
 
-Additional transfer runs exist on CAVIAR, Edinburgh Forum, Collective Activity and Mall.
-TODO — extract the numbers and their protocols from the run logs.
+### Counting pipeline across public datasets
+
+Stock pretrained detector, per-dataset line/zone geometry, event-level F1:
+
+| Dataset | F1 | n (GT events) | Note |
+|---|---|---|---|
+| CAVIAR | **0.933** | 157 (TP 139 · FP 2 · FN 18) | Mall corridor, cooldown 120 |
+| Mall | **0.901** | 156 | Density-counting dataset |
+| MOT17, all 7 sequences | **0.889** | 342 | Same config across all sequences |
+| Edinburgh Office, absence events | **1.000** | 16 | 5 days of footage |
+| Edinburgh Forum | **0.9905** | 58 750 | ⚠️ per-frame, not per-event — see below |
+
+**Edinburgh Forum 0.9905 is a per-frame figure** over 58 750 frames, and carries the same
+autocorrelation problem as the table-occupancy number in §2: consecutive frames are not
+independent samples. It is not comparable to the event-level F1 in the rows above it and
+should not be quoted as though it were.
+
+**No single configuration wins everywhere.** Per-sequence tuning of two or three
+parameters (confidence, cooldown window, line placement) was needed on each dataset;
+the production pattern that came out of this is an operator spending five to ten minutes
+per installation, not a universal config. That is an honest description of the
+deployment cost and worth saying out loud — it is the part vendors leave out.
+
+**What did not work**, from the same experiments: lowering confidence to 0.10 did not
+raise recall, because the detector was not filtering those people out — it physically
+could not see them, being small or occluded. Raising `imgsz` to 1920 helped on sequences
+with small distant subjects and actively hurt on low-resolution ones, where upscaling
+added noise.
 
 ---
 
